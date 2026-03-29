@@ -6,58 +6,69 @@ from finviz.screener import Screener
 st.set_page_config(page_title="Ariel Finviz Alpha", layout="wide")
 
 @st.cache_data(ttl=3600)
-def run_finviz_scan():
-    """Nutzt die finviz-library für einen Profi-Scan."""
-    # Filter-Logik (Ariel / Minervini / Ryan):
-    # idx_sp500 = S&P 500
-    # ta_sma200_pa = Preis über 200-Tage-Linie (Stage 2 Basis)
-    # ta_sma50_pa = Preis über 50-Tage-Linie (Kurzfristiges Momentum)
-    # ta_highlow52w_nh = Neues 52-Wochen-Hoch (Optional, für Zanger-Stil)
-    
-    filters = ['idx_sp500', 'ta_sma200_pa', 'ta_sma50_pa'] 
+def run_finviz_scan(index_filter):
+    """Nutzt die finviz-library mit den korrekten Argumenten."""
+    # Kriterien: Preis > MA200, Preis > MA50 (Stage 2 Momentum)
+    # 'ta_sma200_pa' -> Price above SMA200
+    # 'ta_sma50_pa'  -> Price above SMA50
+    base_filters = [index_filter, 'ta_sma200_pa', 'ta_sma50_pa'] 
     
     try:
-        # Wir rufen die Performance-Tabelle ab
-        stock_list = Screener(filterlist=filters, table='Performance', order='-perf13w')
+        # Korrektes Argument: 'filters' statt 'filterlist'
+        # Wir laden die 'Performance' Tabelle und sortieren nach 13-Wochen (Quarter)
+        stock_list = Screener(filters=base_filters, table='Performance', order='-perf13w')
         
-        # In Pandas DataFrame umwandeln
+        # Umwandlung in DataFrame
         df = pd.DataFrame(stock_list.data)
         return df
     except Exception as e:
-        st.error(f"Fehler beim Finviz-Abruf: {e}")
+        st.error(f"Technischer Fehler beim Abruf: {e}")
         return pd.DataFrame()
 
-st.title("🏹 Ariel & Ryan: Finviz Leader-Scanner")
-st.markdown("Scant den **S&P 500** nach den stärksten Aktien (Stage 2 + Momentum).")
+st.title("🏹 Ariel & Ryan: Leader-Scanner (Finviz)")
+st.markdown("Fokus: **Stage 2 Trend** & **Relative Stärke (3 Monate)**")
 
-if st.button('🚀 Markt-Scan ausführen'):
-    with st.spinner('Lese Finviz-Daten aus...'):
-        df = run_finviz_scan()
+# Index Auswahl für das 15-Minuten-Ritual
+index_choice = st.sidebar.radio(
+    "Wähle den Markt-Fokus:",
+    ('S&P 500', 'Nasdaq 100')
+)
+
+# Mapping für Finviz Filter
+index_map = {
+    'S&P 500': 'idx_sp500',
+    'Nasdaq 100': 'idx_ndx'
+}
+
+if st.button(f'🚀 Scan {index_choice} starten'):
+    with st.spinner(f'Analysiere {index_choice}...'):
+        df = run_finviz_scan(index_map[index_choice])
         
         if not df.empty:
-            # Spalten-Bereinigung für das Dashboard
-            # 'Perf Quart' ist unser RS-Score Ersatz
-            df['RS Score'] = df['Perf Quart'].str.replace('%', '').astype(float)
+            # Daten bereinigen (Prozentzeichen entfernen)
+            for col in ['Perf Quart', 'Perf Month', 'Perf Year', 'Volatility']:
+                if col in df.columns:
+                    df[col] = df[col].str.replace('%', '').astype(float)
             
-            # Leaderboard sortieren
-            df_final = df.sort_values(by='RS Score', ascending=False)
+            # Sortierung nach RS (Perf Quart)
+            df = df.sort_values(by='Perf Quart', ascending=False)
             
-            st.subheader("Top Momentum Leader (Quarterly Performance)")
+            st.subheader(f"Momentum Leader in {index_choice}")
             
-            # Wichtige Spalten für das 15-Minuten-Ritual
-            display_cols = ['Ticker', 'Price', 'RS Score', 'Perf Month', 'Perf Year', 'Volatility']
+            # Wichtige Spalten für Ariel/Minervini/Ryan
+            display_cols = ['Ticker', 'Price', 'Perf Quart', 'Perf Month', 'Perf Year', 'Volatility', 'Sector']
             
-            # Styling: Grün für hohe RS-Werte
+            # Anzeige der Tabelle
             st.dataframe(
-                df_final[display_cols].style.background_gradient(subset=['RS Score'], cmap='RdYlGn'),
+                df[display_cols].style.background_gradient(subset=['Perf Quart'], cmap='RdYlGn'),
                 use_container_width=True,
                 height=600
             )
             
-            # Export für TradingView
-            ticker_list = ",".join(df_final['Ticker'].tolist())
-            st.text_area("TradingView Watchlist (Copy-Paste):", ticker_list)
+            # Export für TradingView/Finviz Watchlists
+            ticker_list = ",".join(df['Ticker'].tolist())
+            st.text_area("Watchlist für TradingView (Copy-Paste):", ticker_list)
             
-            st.success("Scan erfolgreich. Diese Aktien zeigen die stärkste relative Stärke im S&P 500.")
+            st.success(f"Gefunden: {len(df)} Aktien im Stage 2 Uptrend.")
         else:
-            st.warning("Keine Daten gefunden oder Finviz blockiert die IP. Versuche es später erneut.")
+            st.warning("Keine Daten gefunden. Finviz blockiert eventuell die Cloud-IP von Streamlit. Versuche es in 5-10 Minuten erneut.")
