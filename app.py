@@ -3,16 +3,14 @@ import pandas as pd
 from finviz.screener import Screener
 
 # Konfiguration
-st.set_page_config(page_title="Ariel Finviz Momentum", layout="wide")
+st.set_page_config(page_title="Ariel Momentum Top 30", layout="wide")
 
 @st.cache_data(ttl=3600)
 def run_finviz_scan(index_filter):
-    """Holt Daten von Finviz und filtert nach Stage 2."""
-    # Filter: Preis über MA200 & MA50
+    """Holt Daten von Finviz: Stage 2 & Momentum."""
     filters = [index_filter, 'ta_sma200_pa', 'ta_sma50_pa']
-    
     try:
-        # Abruf der Performance-Tabelle
+        # Wir nutzen die 'Performance' Tabelle
         stock_list = Screener(filters=filters, table='Performance', order='-perf13w')
         if not stock_list:
             return pd.DataFrame()
@@ -21,55 +19,35 @@ def run_finviz_scan(index_filter):
         st.error(f"Finviz-Fehler: {e}")
         return pd.DataFrame()
 
-st.title("🏹 Ariel & Zanger Momentum Matrix")
-st.markdown("Strategie: **Stage 2 Leader** & **Relative Strength (RS)**")
+st.title("🏹 Ariel Top 30 Leaderboard")
+st.markdown("Fokus: **Sektor-Stärke** & **Relative Stärke (3 Monate)**")
 
 # Sidebar
 index_choice = st.sidebar.radio("Index Fokus:", ('S&P 500', 'Nasdaq 100'))
 index_map = {'S&P 500': 'idx_sp500', 'Nasdaq 100': 'idx_ndx'}
 
-if st.button(f'🚀 Scan {index_choice} starten'):
-    with st.spinner('Analysiere Markt-Leader...'):
+if st.button(f'🚀 Top 30 {index_choice} scannen'):
+    with st.spinner('Analysiere Sektoren und Leader...'):
         df = run_finviz_scan(index_map[index_choice])
         
         if not df.empty:
-            # --- DATEN-CLEANING ---
-            cols_to_convert = ['Perf Quart', 'Perf Month', 'Perf Year', 'Volatility']
-            for col in cols_to_convert:
+            # --- DATEN-REINIGUNG ---
+            cols_to_fix = ['Perf Quart', 'Perf Month', 'Volatility']
+            for col in cols_to_fix:
                 if col in df.columns:
-                    df[col] = df[col].str.replace('%', '', regex=False)
-                    df[col] = pd.to_numeric(df[col], errors='coerce')
+                    df[col] = pd.to_numeric(df[col].str.replace('%', '', regex=False), errors='coerce')
 
-            # Sortierung nach RS
-            df = df.sort_values(by='Perf Quart', ascending=False).dropna(subset=['Perf Quart'])
+            # Sortierung & Top 30 Limit
+            df = df.sort_values(by='Perf Quart', ascending=False).head(30)
 
-            # Dynamische Spalten
-            target_cols = ['Ticker', 'Price', 'Perf Quart', 'Perf Month', 'Perf Year', 'Volatility', 'Sector', 'Industry']
-            available_cols = [c for c in target_cols if c in df.columns]
-
-            st.subheader(f"Top {len(df)} Momentum Aktien ({index_choice})")
-
-            # --- SICHERE DARSTELLUNG ---
-            try:
-                # Versuche Heatmap (benötigt matplotlib)
-                st.dataframe(
-                    df[available_cols].style.background_gradient(
-                        subset=['Perf Quart'] if 'Perf Quart' in available_cols else [], 
-                        cmap='RdYlGn'
-                    ),
-                    use_container_width=True,
-                    height=600
-                )
-            except ImportError:
-                # Fallback falls matplotlib fehlt
-                st.warning("Hinweis: Matplotlib fehlt in requirements.txt – Tabelle wird ohne Farben angezeigt.")
-                st.dataframe(df[available_cols], use_container_width=True, height=600)
-
-            # Export
-            st.subheader("📋 Watchlist Export")
-            ticker_str = ",".join(df['Ticker'].tolist())
-            st.text_area("Copy-Paste für TradingView:", ticker_str, height=100)
+            # --- SEKTOR-ANALYSE ---
+            st.subheader("📊 Sektor-Verteilung der Top 30")
+            if 'Sector' in df.columns:
+                sector_counts = df['Sector'].value_counts()
+                st.bar_chart(sector_counts)
             
-            st.info("💡 **Ariel-Check:** Achte auf Aktien mit hohem 'Perf Quart' bei gleichzeitig sinkender 'Volatility'.")
-        else:
-            st.warning("Keine Ergebnisse oder IP-Blockade. Versuche es in 5 Minuten erneut.")
+            # --- LEADER-TABELLE ---
+            st.subheader(f"Die 30 stärksten Titel ({index_choice})")
+            
+            # Relevante Spalten (Sektor & Industry inkludiert)
+            display_cols = ['
