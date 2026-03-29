@@ -1,67 +1,88 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+import urllib.request
 
-st.set_page_config(page_title="Momentum Alpha Screener", layout="wide")
+# Konfiguration der Seite
+st.set_page_config(page_title="Ariel & Minervini Scanner", layout="wide")
 
 @st.cache_data(ttl=86400)
 def get_tickers():
-    # Holt S&P 500 von Wikipedia
-    sp500 = pd.read_html('https://en.wikipedia.org/wiki/List_of_S%26P_500_companies')[0]['Symbol'].tolist()
-    # Holt Nasdaq 100 von Wikipedia
-    ndx100 = pd.read_html('https://en.wikipedia.org/wiki/Nasdaq-100#Components')[0]['Ticker'].tolist()
-    # Kombinieren und Duplikate entfernen
-    return list(set(sp500 + ndx100 + ['SPY', 'QQQ', 'DIA', 'IWM']))
+    """Holt die S&P 500 und Nasdaq 100 Ticker von Wikipedia mit Browser-Header."""
+    hdr = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+    try:
+        # S&P 500
+        req_sp = urllib.request.Request('https://en.wikipedia.org/wiki/List_of_S%26P_500_companies', headers=hdr)
+        with urllib.request.urlopen(req_sp) as response:
+            sp500 = pd.read_html(response)[0]['Symbol'].tolist()
+        
+        # Nasdaq 100
+        req_ndx = urllib.request.Request('https://en.wikipedia.org/wiki/Nasdaq-100#Components', headers=hdr)
+        with urllib.request.urlopen(req_ndx) as response:
+            ndx100 = pd.read_html(response)[0]['Ticker'].tolist()
+            
+        # Bereinigen (Punkte in Ticker-Symbolen für yfinance anpassen)
+        tickers = list(set(sp500 + ndx100))
+        tickers = [t.replace('.', '-') for t in tickers]
+        return tickers + ['SPY', 'QQQ', 'DIA', 'IWM']
+    except Exception as e:
+        st.error(f"Ticker-Download fehlgeschlagen: {e}")
+        return ['NVDA', 'AAPL', 'MSFT', 'AMZN', 'META', 'GOOGL', 'TSLA', 'SPY', 'QQQ']
 
 @st.cache_data(ttl=3600)
-def get_data(tickers):
-    # Batch-Download der Schlusskurse (1 Jahr für Momentum/Trend)
-    df = yf.download(tickers, period="1y", interval="1d", progress=False)['Close']
-    return df
+def get_market_data(tickers):
+    """Lädt die Kurse für alle Ticker im Batch."""
+    # Wir brauchen 1 Jahr (252 Handelstage) für RS und Trend-Checks
+    df = yf.download(tickers, period="1y", interval="1d", progress=False)
+    if 'Close' in df:
+        return df['Close']
+    return pd.DataFrame()
 
-st.title("🏆 Full Market Momentum Scanner")
-st.markdown("Scant S&P 500 & Nasdaq 100 nach **Minervini**, **Ryan** & **Ariel** Kriterien.")
+# --- UI START ---
+st.title("🏆 Full Market Momentum Alpha")
+st.markdown("Scant S&P 500 & Nasdaq 100 nach den Regeln von **Minervini, Ryan & Ariel**.")
 
-if st.button('🔍 Markt-Scan starten (ca. 45-60 Sek.)'):
+if st.button('🔍 Markt-Scan starten (ca. 60 Sek.)'):
     with st.spinner('Lade Daten von ca. 600 Aktien...'):
         tickers = get_tickers()
-        all_data = get_data(tickers)
+        all_data = get_market_data(tickers)
         
         if all_data.empty:
-            st.error("Keine Daten empfangen. Bitte erneut versuchen.")
+            st.error("Keine Daten von Yahoo Finance empfangen.")
         else:
             spy = all_data['SPY']
             results = []
 
-            # Loop durch alle Spalten (Aktien)
+            # Loop durch alle Aktien
             for t in all_data.columns:
-                if t in ['SPY', 'QQQ', 'DIA', 'IWM'] or pd.isna(t): continue
+                if t in ['SPY', 'QQQ', 'DIA', 'IWM'] or pd.isna(t):
+                    continue
                 
                 p = all_data[t].dropna()
-                if len(p) < 200: continue
+                if len(p) < 200: # Filter für zu junge Aktien
+                    continue
                 
                 curr = p.iloc[-1]
-                # Gleitende Durchschnitte für Minervini Trend Template
                 ma50 = p.rolling(50).mean().iloc[-1]
                 ma150 = p.rolling(150).mean().iloc[-1]
                 ma200 = p.rolling(200).mean().iloc[-1]
                 h52 = p.max()
                 l52 = p.min()
 
-                # --- HARTE FILTER (Minervini Stage 2) ---
+                # --- MINERVINI STAGE 2 FILTER ---
                 # 1. Preis über MA150 & MA200
                 # 2. MA150 über MA200
-                # 3. MA200 steigt (Trend-Bestätigung)
-                # 4. Preis mind. 25% über 52W-Tief
-                # 5. Preis innerhalb 25% vom 52W-Hoch (Setup-Zone)
+                # 3. MA200 steigt (Trend)
+                # 4. Preis über MA50
+                # 5. Preis innerhalb 25% vom Hoch (Setup Zone)
                 is_stage2 = (curr > ma150 > ma200) and (ma150 > ma200) and \
                             (curr > l52 * 1.25) and (curr > h52 * 0.75)
                 
                 if is_stage2:
-                    # RS-Score (Performance relativ zum SPY über 3 Monate)
+                    # RS-Score (Performance relativ zum Markt über 3 Monate)
                     rs_val = ((curr / p.iloc[-63]) - (spy.iloc[-1] / spy.iloc[-63])) * 100
                     
-                    # David Ryan RS-Line Check (Neues 21-Tage-Hoch in der relativen Stärke)
+                    # David Ryan RS-Line New High (21 Tage Fenster)
                     rs_line = p / spy
                     rs_new_high = rs_line.iloc[-1] >= rs_line.iloc[-21:].max()
 
@@ -69,21 +90,26 @@ if st.button('🔍 Markt-Scan starten (ca. 45-60 Sek.)'):
                         "Ticker": t,
                         "RS Score": round(rs_val, 2),
                         "RS-Line": "🚀 NEW HIGH" if rs_new_high else " ",
-                        "Dist. High %": round(((curr / h52) - 1) * 100, 1),
-                        "MA50 Dist %": round(((curr / ma50) - 1) * 100, 1)
+                        "Dist. 52W High %": round(((curr / h52) - 1) * 100, 1),
+                        "MA50 Dist %": round(((curr / ma50) - 1) * 100, 1),
+                        "Price": round(curr, 2)
                     })
 
             if results:
                 df_final = pd.DataFrame(results).sort_values(by="RS Score", ascending=False)
                 
-                # Markt-Zustand (Mark-Minervini-Regel: Nur kaufen, wenn der Markt mitspielt)
+                # Markt-Zustand (Minervini Regel: Keine Käufe im Bärenmarkt)
                 spy_200 = spy.rolling(200).mean().iloc[-1]
-                market_status = "🟢 RISK-ON" if spy.iloc[-1] > spy_200 else "🔴 RISK-OFF (Vorsicht!)"
-                st.metric("Gesamtmarkt (SPY vs. 200-MA)", market_status)
+                market_status = "🟢 BULLISH" if spy.iloc[-1] > spy_200 else "🔴 BEARISH (Cash halten!)"
+                st.metric("Gesamtmarkt-Status (SPY vs. 200-MA)", market_status)
 
                 st.subheader(f"Gefundene Momentum-Leader: {len(df_final)}")
-                st.dataframe(df_final.style.background_gradient(subset=['RS Score'], cmap='RdYlGn'), height=600)
+                st.dataframe(
+                    df_final.style.background_gradient(subset=['RS Score'], cmap='RdYlGn'), 
+                    height=600, 
+                    use_container_width=True
+                )
             else:
                 st.warning("Keine Aktie erfüllt aktuell die harten Stage-2-Kriterien.")
 else:
-    st.info("Klicke auf den Button, um das tägliche Screening-Ritual zu starten.")
+    st.info("Klicke auf den Button, um das tägliche 15-Minuten-Ritual zu starten.")
