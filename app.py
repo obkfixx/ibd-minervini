@@ -7,68 +7,71 @@ st.set_page_config(page_title="Ariel Finviz Alpha", layout="wide")
 
 @st.cache_data(ttl=3600)
 def run_finviz_scan(index_filter):
-    """Nutzt die finviz-library mit den korrekten Argumenten."""
-    # Kriterien: Preis > MA200, Preis > MA50 (Stage 2 Momentum)
-    # 'ta_sma200_pa' -> Price above SMA200
-    # 'ta_sma50_pa'  -> Price above SMA50
+    """Nutzt die finviz-library mit Fehlerbehandlung."""
+    # Filter: Preis > MA200 & Preis > MA50 (Minervini Stage 2 Basis)
     base_filters = [index_filter, 'ta_sma200_pa', 'ta_sma50_pa'] 
     
     try:
-        # Korrektes Argument: 'filters' statt 'filterlist'
-        # Wir laden die 'Performance' Tabelle und sortieren nach 13-Wochen (Quarter)
+        # Abruf der Performance-Tabelle, sortiert nach 13-Wochen (Quarter)
         stock_list = Screener(filters=base_filters, table='Performance', order='-perf13w')
         
-        # Umwandlung in DataFrame
+        if not stock_list or len(stock_list) == 0:
+            return pd.DataFrame()
+            
         df = pd.DataFrame(stock_list.data)
         return df
     except Exception as e:
-        st.error(f"Technischer Fehler beim Abruf: {e}")
+        st.error(f"Finviz Abruf-Fehler: {e}")
         return pd.DataFrame()
 
-st.title("🏹 Ariel & Ryan: Leader-Scanner (Finviz)")
+st.title("🏹 Ariel & Ryan: Momentum Scanner")
 st.markdown("Fokus: **Stage 2 Trend** & **Relative Stärke (3 Monate)**")
 
-# Index Auswahl für das 15-Minuten-Ritual
+# Index Auswahl
 index_choice = st.sidebar.radio(
-    "Wähle den Markt-Fokus:",
+    "Markt-Fokus wählen:",
     ('S&P 500', 'Nasdaq 100')
 )
 
-# Mapping für Finviz Filter
 index_map = {
     'S&P 500': 'idx_sp500',
     'Nasdaq 100': 'idx_ndx'
 }
 
 if st.button(f'🚀 Scan {index_choice} starten'):
-    with st.spinner(f'Analysiere {index_choice}...'):
+    with st.spinner(f'Analysiere {index_choice} Komponenten...'):
         df = run_finviz_scan(index_map[index_choice])
         
         if not df.empty:
-            # Daten bereinigen (Prozentzeichen entfernen)
-            for col in ['Perf Quart', 'Perf Month', 'Perf Year', 'Volatility']:
+            # --- SICHERE DATEN-UMWANDLUNG ---
+            cols_to_fix = ['Perf Quart', 'Perf Month', 'Perf Year', 'Volatility']
+            
+            for col in cols_to_fix:
                 if col in df.columns:
-                    df[col] = df[col].str.replace('%', '').astype(float)
+                    # 1. Entferne das % Zeichen
+                    df[col] = df[col].str.replace('%', '', regex=False)
+                    # 2. Umwandeln in Zahlen, Fehler (wie '-') werden zu NaN (Not a Number)
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
             
-            # Sortierung nach RS (Perf Quart)
-            df = df.sort_values(by='Perf Quart', ascending=False)
+            # Sortierung nach Relative Strength (Performance Quartal)
+            df = df.sort_values(by='Perf Quart', ascending=False).dropna(subset=['Perf Quart'])
             
-            st.subheader(f"Momentum Leader in {index_choice}")
+            st.subheader(f"Top Momentum Leader: {index_choice}")
             
-            # Wichtige Spalten für Ariel/Minervini/Ryan
+            # Anzeige-Spalten
             display_cols = ['Ticker', 'Price', 'Perf Quart', 'Perf Month', 'Perf Year', 'Volatility', 'Sector']
             
-            # Anzeige der Tabelle
+            # Heatmap-Tabelle
             st.dataframe(
                 df[display_cols].style.background_gradient(subset=['Perf Quart'], cmap='RdYlGn'),
                 use_container_width=True,
                 height=600
             )
             
-            # Export für TradingView/Finviz Watchlists
+            # Copy-Paste Sektion für TradingView
             ticker_list = ",".join(df['Ticker'].tolist())
-            st.text_area("Watchlist für TradingView (Copy-Paste):", ticker_list)
+            st.text_area("TradingView Watchlist:", ticker_list)
             
-            st.success(f"Gefunden: {len(df)} Aktien im Stage 2 Uptrend.")
+            st.success(f"Erfolgreich {len(df)} Aktien im Stage 2 Trend gefunden.")
         else:
-            st.warning("Keine Daten gefunden. Finviz blockiert eventuell die Cloud-IP von Streamlit. Versuche es in 5-10 Minuten erneut.")
+            st.warning("Keine Daten gefunden. Finviz blockiert eventuell die Cloud-IP. Bitte kurz warten und erneut versuchen.")
